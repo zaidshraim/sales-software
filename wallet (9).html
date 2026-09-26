@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ZainTom Wallet</title>
+<style>
+:root{
+  --bg:#0f0b1e; --card:#1c1638; --card2:#241d47; --accent:#8b5cf6; --accent2:#ff6a3d;
+  --text:#f1eefc; --muted:#9d94c2; --green:#22c55e; --red:#f87171; --border:#332a5c;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){ --bg:#f5f3fb; --card:#ffffff; --card2:#f0edfb; --text:#1c1730; --muted:#6b6485; --border:#e3ddf6; }
+}
+:root[data-theme="dark"]{ --bg:#0f0b1e; --card:#1c1638; --card2:#241d47; --text:#f1eefc; --muted:#9d94c2; --border:#332a5c; }
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:var(--bg); color:var(--text);
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+#app{max-width:640px;margin:0 auto;padding:20px 16px 40px;}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:18px;}
+.brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;flex-shrink:0;}
+.brand h1{font-size:19px;margin:0;}
+.brand small{color:var(--muted);display:block;font-size:12px;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:14px;}
+.card h2{font-size:15px;margin:0 0 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 5px;}
+input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--border);background:var(--card2);color:var(--text);font-size:15px;}
+button{cursor:pointer;border:none;border-radius:10px;padding:11px 16px;font-size:15px;font-weight:600;}
+.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;width:100%;margin-top:12px;}
+.btn-ghost{background:var(--card2);color:var(--text);width:100%;margin-top:8px;}
+.btn-small{background:var(--card2);color:var(--muted);padding:7px 12px;font-size:13px;}
+.balance{font-size:36px;font-weight:700;margin:4px 0;}
+.wallet-addr{font-family:monospace;font-size:13px;color:var(--muted);background:var(--card2);padding:6px 10px;border-radius:8px;display:inline-block;word-break:break-all;}
+.msg{padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:10px;}
+.msg.err{background:rgba(248,113,113,.15);color:var(--red);}
+.msg.ok{background:rgba(34,197,94,.15);color:var(--green);}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+.tx{padding:10px 0;border-bottom:1px solid var(--border);font-size:13px;}
+.tx:last-child{border-bottom:none;}
+.tx .amt-out{color:var(--red);font-weight:700;}
+.tx .amt-in{color:var(--green);font-weight:700;}
+.tx .meta{color:var(--muted);font-size:12px;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+th,td{padding:8px 6px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;}
+th{cursor:pointer;color:var(--muted);user-select:none;position:sticky;top:0;background:var(--card);}
+th:hover{color:var(--text);}
+.tablewrap{overflow-x:auto;max-height:340px;overflow-y:auto;border-radius:10px;}
+.tag{font-size:11px;padding:3px 8px;border-radius:20px;background:var(--card2);color:var(--muted);}
+.op-tag{background:rgba(255,106,61,.18);color:var(--accent2);}
+a.link{color:var(--accent);cursor:pointer;font-size:13px;}
+</style>
+</head>
+<body>
+<div id="app">Loading…</div>
+<script>
+let db = null;
+let state = { role: null, wallet: null };
+let accounts = {};
+let products = {};
+let sales = {};
+let msg = null;
+let opSort = { field: 'createdAt', dir: 'desc' };
+let opFilter = '';
+let saleSort = { field: 'timestamp', dir: 'desc' };
+let saleFilter = '';
+let opTab = 'accounts';
+
+function loadSession(){ try{ const s=sessionStorage.getItem('zt_session'); if(s) state=JSON.parse(s); }catch(e){} }
+function saveSession(){ try{ sessionStorage.setItem('zt_session', JSON.stringify(state)); }catch(e){} }
+function clearSession(){ state={role:null,wallet:null}; try{ sessionStorage.removeItem('zt_session'); }catch(e){} }
+function showErr(t){ msg={type:'err',text:t}; render(); }
+function showOk(t){ msg={type:'ok',text:t}; render(); }
+function fmt(n){ return (Math.round(n*100)/100).toFixed(2)+' JD'; }
+function genWallet(){ const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s='ZT'; for(let i=0;i<8;i++) s+=c[Math.floor(Math.random()*c.length)]; return s; }
+function genId(){ return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+async function createAccount(){
+  const name = document.getElementById('newName').value.trim();
+  const pass = document.getElementById('newPass').value;
+  const pass2 = document.getElementById('newPass2').value;
+  if(!name) return showErr('Enter a name for the account.');
+  if(pass.length < 4) return showErr('Password must be at least 4 characters.');
+  if(pass !== pass2) return showErr('Passwords do not match.');
+  let wallet = genWallet();
+  if(db){
+    let snap = await db.doc('accounts/'+wallet).get();
+    while(snap.exists){ wallet=genWallet(); snap=await db.doc('accounts/'+wallet).get(); }
+    await db.doc('accounts/'+wallet).set({name, wallet, password:pass, balance:0, createdAt:Date.now()});
+  } else {
+    accounts[wallet]={name, wallet, password:pass, balance:0, createdAt:Date.now()};
+  }
+  document.getElementById('newName').value='';
+  document.getElementById('newPass').value='';
+  document.getElementById('newPass2').value='';
+  showOk('Account created! Wallet address: '+wallet+' — save it, you\'ll need it to log in. Log your sales to start earning.');
+}
+
+function loginAccount(){
+  const wallet = document.getElementById('accWallet').value.trim().toUpperCase();
+  const pass = document.getElementById('accPass').value;
+  if(!wallet) return showErr('Enter your wallet address.');
+  const acc = accounts[wallet];
+  if(!acc) return showErr('No account found with that wallet address.');
+  if(pass !== acc.password) return showErr('Incorrect password.');
+  state = {role:'account', wallet};
+  saveSession(); msg=null; render();
+}
+function loginOperator(){
+  const pass = document.getElementById('opPass').value;
+  if(pass !== '1234') return showErr('Incorrect operator password.');
+  state = {role:'operator', wallet:null};
+  saveSession(); msg=null; render();
+}
+function logout(){ clearSession(); msg=null; render(); }
+
+function setOpSort(field){
+  if(opSort.field===field) opSort.dir = opSort.dir==='asc'?'desc':'asc';
+  else opSort = {field, dir:'asc'};
+  render();
+}
+function sortedAccounts(){
+  let list = Object.values(accounts).filter(a=>{
+    const f=opFilter.toLowerCase();
+    return !f || a.name.toLowerCase().includes(f) || a.wallet.toLowerCase().includes(f);
+  });
+  const {field,dir}=opSort;
+  list.sort((a,b)=>{
+    let av=a[field], bv=b[field];
+    if(typeof av==='string') return dir==='asc'? av.localeCompare(bv): bv.localeCompare(av);
+    return dir==='asc'? av-bv : bv-av;
+  });
+  return list;
+}
+
+async function addProduct(){
+  const name = document.getElementById('prName').value.trim();
+  const price = parseFloat(document.getElementById('prPrice').value);
+  const category = document.getElementById('prCat').value.trim() || 'Other';
+  if(!name) return showErr('Enter a product name.');
+  if(!(price>0)) return showErr('Enter a valid price.');
+  const id = genId();
+  const data = {name, price, category, createdAt:Date.now()};
+  if(db){ await db.doc('products/'+id).set(data); } else { products[id]=data; }
+  document.getElementById('prName').value=''; document.getElementById('prPrice').value=''; document.getElementById('prCat').value='';
+  showOk('Product added to catalog: '+name+'.');
+}
+async function deleteProduct(id){
+  if(db){ await db.doc('products/'+id).delete(); } else { delete products[id]; }
+  render();
+}
+
+function setSaleSort(field){
+  if(saleSort.field===field) saleSort.dir = saleSort.dir==='asc'?'desc':'asc';
+  else saleSort = {field, dir:'asc'};
+  render();
+}
+function sortedSales(){
+  let list = Object.entries(sales).map(([id,s])=>({id,...s})).filter(s=>{
+    const f=saleFilter.toLowerCase();
+    return !f || s.item.toLowerCase().includes(f) || (s.customer||'').toLowerCase().includes(f) || (s.enteredBy||'').toLowerCase().includes(f);
+  });
+  const {field,dir}=saleSort;
+  list.sort((a,b)=>{
+    let av=a[field]||'', bv=b[field]||'';
+    if(typeof av==='string') return dir==='asc'? av.localeCompare(bv): bv.localeCompare(av);
+    return dir==='asc'? av-bv : bv-av;
+  });
+  return list;
+}
+async function logSale(){
+  const item = document.getElementById('saleItem').value.trim();
+  const price = parseFloat(document.getElementById('salePrice').value);
+  const customer = document.getElementById('saleCustomer').value.trim();
+  const notes = document.getElementById('saleNotes').value.trim();
+  const wallet = state.wallet;
+  const acc = accounts[wallet];
+  if(!item) return showErr('Enter what was sold.');
+  if(!(price>0)) return showErr('Enter a valid price.');
+  const id = genId();
+  const data = {item, price, customer, enteredBy:acc.name, wallet, notes, timestamp:Date.now()};
+  if(db){
+    await db.doc('sales/'+id).set(data);
+    const ref = db.doc('accounts/'+wallet);
+    const snap = await ref.get();
+    const fd = snap.data();
+    await ref.update({balance:+(fd.balance+price).toFixed(2)});
+  } else {
+    sales[id]=data;
+    accounts[wallet].balance = +(accounts[wallet].balance+price).toFixed(2);
+  }
+  document.getElementById('saleItem').value=''; document.getElementById('salePrice').value='';
+  document.getElementById('saleCustomer').value=''; document.getElementById('saleNotes').value='';
+  showOk('Sale logged — '+fmt(price)+' added to your total.');
+}
+async function deleteSale(id){
+  const s = sales[id];
+  if(s && s.wallet && accounts[s.wallet]){
+    if(db){
+      const ref = db.doc('accounts/'+s.wallet);
+      const snap = await ref.get();
+      if(snap.exists){ const fd=snap.data(); await ref.update({balance:+Math.max(0,fd.balance-s.price).toFixed(2)}); }
+    } else {
+      accounts[s.wallet].balance = Math.max(0, +(accounts[s.wallet].balance-s.price).toFixed(2));
+    }
+  }
+  if(db){ await db.doc('sales/'+id).delete(); } else { delete sales[id]; }
+  render();
+}
+function fillSaleFromCatalog(){
+  const sel = document.getElementById('saleCatalog').value;
+  if(sel && products[sel]){
+    document.getElementById('saleItem').value = products[sel].name;
+    document.getElementById('salePrice').value = products[sel].price;
+  }
+}
+
+function render(){
+  const app = document.getElementById('app');
+  const msgHtml = msg ? `<div class="msg ${msg.type==='err'?'err':'ok'}">${msg.text}</div>` : '';
+  if(state.role==='operator'){ app.innerHTML = renderOperator(msgHtml); return; }
+  if(state.role==='account'){ app.innerHTML = renderAccount(msgHtml); return; }
+  app.innerHTML = renderLogin(msgHtml);
+}
+
+function renderLogin(msgHtml){
+  return `
+  <div class="brand"><div class="logo">ZT</div><div><h1>ZainTom Wallet</h1><small>Zain Cash × Phantom, in one place</small></div></div>
+  ${msgHtml}
+  <div class="card">
+    <h2>Create account</h2>
+    <label>Account name</label>
+    <input id="newName" placeholder="e.g. Ahmad">
+    <label>Choose a password</label>
+    <input id="newPass" type="password" placeholder="At least 4 characters">
+    <label>Confirm password</label>
+    <input id="newPass2" type="password" placeholder="Repeat password">
+    <button class="btn-primary" onclick="createAccount()">Create account</button>
+  </div>
+  <div class="card">
+    <h2>Access an account</h2>
+    <label>Wallet address</label>
+    <input id="accWallet" placeholder="ZT••••••••" style="text-transform:uppercase">
+    <label>Password</label>
+    <input id="accPass" type="password" placeholder="••••">
+    <button class="btn-primary" onclick="loginAccount()">Log in</button>
+  </div>
+  <div class="card">
+    <h2>Operator</h2>
+    <input id="opPass" type="password" placeholder="Operator password">
+    <button class="btn-ghost" onclick="loginOperator()">Enter operator mode</button>
+  </div>`;
+}
+
+function renderAccount(msgHtml){
+  const a = accounts[state.wallet];
+  if(!a){ clearSession(); return renderLogin('<div class="msg err">Account no longer exists.</div>'); }
+  const mySales = Object.values(sales).filter(s=>s.wallet===a.wallet).sort((x,y)=>y.timestamp-x.timestamp);
+  const salesHtml = mySales.length ? mySales.map(s=>
+    `<div class="tx"><div class="row"><span>${s.item}${s.customer? ' — '+s.customer : ''}</span>
+      <span class="amt-in">+${fmt(s.price)}</span></div>
+      <div class="meta">${new Date(s.timestamp).toLocaleString()}${s.notes? ' · '+s.notes : ''}</div></div>`
+  ).join('') : `<p style="color:var(--muted);font-size:13px;">No sales logged yet.</p>`;
+  const catalogOpts = Object.entries(products).sort((a,b)=>a[1].name.localeCompare(b[1].name))
+    .map(([id,p])=>`<option value="${id}">${p.name} — ${fmt(p.price)}</option>`).join('');
+  return `
+  <div class="row"><div class="brand"><div class="logo">ZT</div><div><h1>${a.name}</h1><small>ZainTom Wallet</small></div></div>
+  <button class="btn-small" onclick="logout()">Log out</button></div>
+  ${msgHtml}
+  <div class="card">
+    <h2>My total sales</h2>
+    <div class="balance">${fmt(a.balance)}</div>
+    <div class="row" style="margin-top:6px;">
+      <span class="wallet-addr">${a.wallet}</span>
+      <button class="btn-small" onclick="navigator.clipboard&&navigator.clipboard.writeText('${a.wallet}');showOk('Wallet address copied.')">Copy</button>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin:10px 0 0;">Member since ${new Date(a.createdAt).toLocaleDateString()}</p>
+  </div>
+  <div class="card">
+    <h2>Log a sale</h2>
+    ${Object.keys(products).length ? `<label>Quick-fill from catalog (optional)</label>
+    <select id="saleCatalog" onchange="fillSaleFromCatalog()"><option value="">— choose —</option>${catalogOpts}</select>` : ''}
+    <label>What did you sell</label>
+    <input id="saleItem" placeholder="e.g. Netflix Premium, Snapchat+">
+    <label>Price (JD)</label>
+    <input id="salePrice" type="number" min="0" step="0.01" placeholder="0.00">
+    <label>Customer (optional)</label>
+    <input id="saleCustomer" placeholder="Customer name">
+    <label>Notes (optional)</label>
+    <input id="saleNotes" placeholder="e.g. 1-month subscription">
+    <button class="btn-primary" onclick="logSale()">Log sale — adds to my total</button>
+  </div>
+  <div class="card">
+    <h2>My sales history</h2>
+    ${salesHtml}
+  </div>`;
+}
+
+function renderOperator(msgHtml){
+  const tabBtn = (id,label) => `<button class="btn-small" style="${opTab===id?'background:var(--accent);color:#fff;':''}" onclick="opTab='${id}';render();">${label}</button>`;
+  const tabs = `<div class="row" style="gap:8px;margin-bottom:14px;">${tabBtn('accounts','Accounts & Wallets')}${tabBtn('sales','Sales Log')}</div>`;
+  return `
+  <div class="row"><div class="brand"><div class="logo">OP</div><div><h1>Operator mode</h1><small><span class="tag op-tag">live database</span></small></div></div>
+  <button class="btn-small" onclick="logout()">Log out</button></div>
+  ${msgHtml}
+  ${tabs}
+  ${opTab==='sales' ? renderSalesTab() : renderAccountsTab()}`;
+}
+
+function renderAccountsTab(){
+  const arrow = f => opSort.field===f ? (opSort.dir==='asc'?' ▲':' ▼') : '';
+  const accRows = sortedAccounts().map(a=>`<tr><td>${a.name}</td><td>${a.wallet}</td><td>${a.password}</td><td>${fmt(a.balance)}</td><td>${new Date(a.createdAt).toLocaleString()}</td></tr>`).join('');
+  return `
+  <div class="card">
+    <div class="row"><h2 style="margin:0;">Accounts (${Object.keys(accounts).length})</h2></div>
+    <input placeholder="Search by name or wallet…" value="${opFilter}" oninput="opFilter=this.value;render();" style="margin-bottom:10px;">
+    <div class="tablewrap"><table>
+      <thead><tr>
+        <th onclick="setOpSort('name')">Name${arrow('name')}</th>
+        <th onclick="setOpSort('wallet')">Wallet${arrow('wallet')}</th>
+        <th onclick="setOpSort('password')">Password${arrow('password')}</th>
+        <th onclick="setOpSort('balance')">Total sales${arrow('balance')}</th>
+        <th onclick="setOpSort('createdAt')">Created${arrow('createdAt')}</th>
+      </tr></thead>
+      <tbody>${accRows || '<tr><td colspan="5" style="color:var(--muted);">No accounts yet.</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function renderSalesTab(){
+  const arrow = f => saleSort.field===f ? (saleSort.dir==='asc'?' ▲':' ▼') : '';
+  const total = Object.values(sales).reduce((s,x)=>s+x.price,0);
+  const prodRows = Object.entries(products).map(([id,p])=>
+    `<tr><td>${p.name}</td><td>${p.category}</td><td>${fmt(p.price)}</td><td><button class="btn-small" onclick="deleteProduct('${id}')">Remove</button></td></tr>`).join('');
+  const saleRows = sortedSales().map(s=>
+    `<tr><td>${s.item}</td><td>${fmt(s.price)}</td><td>${s.customer||'—'}</td><td>${s.enteredBy}</td><td>${s.notes||'—'}</td><td>${new Date(s.timestamp).toLocaleString()}</td><td><button class="btn-small" onclick="deleteSale('${s.id}')">Delete</button></td></tr>`).join('');
+  return `
+  <div class="card">
+    <h2>Catalog (quick-fill items for accounts)</h2>
+    <label>Item name</label>
+    <input id="prName" placeholder="e.g. Netflix Premium, Snapchat+">
+    <label>Price (JD)</label>
+    <input id="prPrice" type="number" min="0" step="0.01" placeholder="0.00">
+    <label>Category</label>
+    <input id="prCat" list="prCatList" placeholder="e.g. Streaming, Software, AI, Technology">
+    <datalist id="prCatList"><option value="Streaming"><option value="Social"><option value="Software"><option value="AI"><option value="Technology"><option value="Gaming"><option value="Other"></datalist>
+    <button class="btn-ghost" onclick="addProduct()">Add to catalog</button>
+    ${prodRows ? `<div class="tablewrap" style="margin-top:12px;"><table>
+      <thead><tr><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead>
+      <tbody>${prodRows}</tbody>
+    </table></div>` : ''}
+  </div>
+  <div class="card">
+    <h2>Sales log (${Object.keys(sales).length}) — total ${fmt(total)}</h2>
+    <p style="color:var(--muted);font-size:12px;margin-top:-6px;">Read from the same live sheet accounts write to when they log a sale.</p>
+    <input placeholder="Search by item, customer or entered-by…" value="${saleFilter}" oninput="saleFilter=this.value;render();" style="margin-bottom:10px;">
+    <div class="tablewrap"><table>
+      <thead><tr>
+        <th onclick="setSaleSort('item')">Item${arrow('item')}</th>
+        <th onclick="setSaleSort('price')">Price${arrow('price')}</th>
+        <th onclick="setSaleSort('customer')">Customer${arrow('customer')}</th>
+        <th onclick="setSaleSort('enteredBy')">Entered by${arrow('enteredBy')}</th>
+        <th>Notes</th>
+        <th onclick="setSaleSort('timestamp')">Date${arrow('timestamp')}</th>
+        <th></th>
+      </tr></thead>
+      <tbody>${saleRows || '<tr><td colspan="7" style="color:var(--muted);">No sales logged yet.</td></tr>'}</tbody>
+    </table></div>
+  </div>`;
+}
+
+(async function init(){
+  loadSession();
+  render();
+  try{ db = (window.claude && window.claude.use) ? await window.claude.use('db') : null; }catch(e){ db=null; }
+  if(db){
+    db.collection('accounts').onSnapshot(snap=>{
+      const m={}; snap.docs.forEach(d=>{ if(d.exists) m[d.id]=d.data(); }); accounts=m; render();
+    }, e=>console.error(e));
+    db.collection('products').onSnapshot(snap=>{
+      const m={}; snap.docs.forEach(d=>{ if(d.exists) m[d.id]=d.data(); }); products=m; render();
+    }, e=>console.error(e));
+    db.collection('sales').onSnapshot(snap=>{
+      const m={}; snap.docs.forEach(d=>{ if(d.exists) m[d.id]=d.data(); }); sales=m; render();
+    }, e=>console.error(e));
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>
